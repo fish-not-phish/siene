@@ -1,0 +1,18 @@
+{% load allauth socialaccount %}
+{% get_providers as socialaccount_providers %}
+
+{% for provider in socialaccount_providers %}
+  {% if provider.id == "openid" %}
+    {% for brand in provider.get_brands %}
+      {% provider_login_url provider openid=brand.openid_url process=process as href %}
+      <a href="{{ href }}" style="display:block;width:100%;padding:.55rem 1rem;margin-bottom:.5rem;border:1px solid #e2e8f0;border-radius:7px;text-align:center;font-size:.875rem;font-weight:500;color:#0f172a;background:#fff;text-decoration:none;">
+        Continue with {{ brand.name }}
+      </a>
+    {% endfor %}
+  {% else %}
+    {% provider_login_url provider process=process scope=scope auth_params=auth_params as href %}
+    <a href="{{ href }}" style="display:block;width:100%;padding:.55rem 1rem;margin-bottom:.5rem;border:1px solid #e2e8f0;border-radius:7px;text-align:center;font-size:.875rem;font-weight:500;color:#0f172a;background:#fff;text-decoration:none;">
+      Continue with {{ provider.name }}
+    </a>
+  {% endif %}
+{% endfor %}

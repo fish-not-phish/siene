@@ -1,0 +1,99 @@
+{% load static allauth i18n %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <title>{% trans "Email Addresses" %} — Siene</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css" integrity="sha384-xOolHFLEh07PJGoPkLv1IbcEPTNtaed2xpHsD9ESMhqIYd0nLMwNLD69Npy4HI+N" crossorigin="anonymous">
+  <style>
+    :root{--ac:#4f8ef7;--acd:#2563eb;--ar:rgba(79,142,247,.28);--bg:#f4f6fb;--sf:#fff;--bd:#e2e8f0;--tx:#0f172a;--mu:#64748b;--dg:#ef4444;--ok:#22c55e;--wn:#f59e0b}
+    html,body{height:100%}
+    body{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:2.5rem 1rem;background:var(--bg);color:var(--tx);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+    .s-card{width:100%;max-width:600px;padding:2rem 2rem 1.5rem;background:var(--sf);border:1px solid var(--bd);border-radius:12px;box-shadow:0 4px 24px rgba(15,23,42,.08)}
+    .s-brand{display:flex;align-items:center;justify-content:center;gap:.55rem;margin-bottom:1.5rem;text-decoration:none!important;color:inherit!important}
+    .s-brand-name{font-size:1.35rem;font-weight:700;letter-spacing:-.025em;color:var(--tx)}
+    .s-heading{font-size:1.1rem;font-weight:600;color:var(--tx);margin-bottom:.35rem;text-align:center}
+    .s-subtext{font-size:.82rem;color:var(--mu);text-align:center;margin-bottom:1.25rem;line-height:1.5}
+    .form-control{border-color:var(--bd);border-radius:7px;padding:.6rem .85rem;font-size:.9rem;color:var(--tx);background:var(--sf);transition:border-color .15s,box-shadow .15s}
+    .form-control:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--ar);outline:none}
+    .form-control.is-invalid{border-color:var(--dg)}
+    .invalid-feedback{font-size:.78rem;color:var(--dg)}
+    .btn{border-radius:7px;font-size:.875rem;font-weight:500;transition:background .15s,border-color .15s,box-shadow .15s}
+    .btn-primary{background-color:var(--ac);border-color:var(--ac);color:#fff}
+    .btn-primary:hover,.btn-primary:focus{background-color:var(--acd);border-color:var(--acd);box-shadow:0 0 0 3px var(--ar)}
+    .btn-outline-secondary{border-color:var(--bd);color:var(--mu)}
+    .btn-outline-secondary:hover{background:var(--bg);color:var(--tx)}
+    .btn-outline-danger{border-color:var(--dg);color:var(--dg)}
+    .btn-outline-danger:hover{background:var(--dg);color:#fff}
+    a{color:var(--ac)}
+    a:hover{color:var(--acd);text-decoration:none}
+    .badge-success{background-color:var(--ok);color:#fff}
+    .badge-warning{background-color:var(--wn);color:#1c1917}
+    .badge-info{background-color:var(--ac);color:#fff}
+    .s-footer{margin-top:1.75rem;font-size:.75rem;color:var(--mu);text-align:center}
+    .gap-2{gap:.5rem}
+  </style>
+</head>
+<body>
+<div class="s-card">
+  <a href="/" class="s-brand">
+    <svg width="28" height="28" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="32" height="32" rx="8" fill="#4f8ef7"/>
+      <path d="M9 11C9 9.895 9.895 9 11 9h10a2 2 0 0 1 2 2v1.5a1 1 0 0 1-1 1H11a2 2 0 0 0-2 2V21a2 2 0 0 0 2 2h10c1.105 0 2-.895 2-2v-1.5a1 1 0 0 0-1-1H12a1 1 0 0 1-1-1v-1a1 1 0 0 1 1-1h9a3 3 0 0 1 3 3V21a4 4 0 0 1-4 4H11a4 4 0 0 1-4-4v-8a2 2 0 0 1 2-2z" fill="white"/>
+    </svg>
+    <span class="s-brand-name">Siene</span>
+  </a>
+
+  <h1 class="s-heading">{% trans "Email Addresses" %}</h1>
+
+  {% if emailaddresses %}
+    <p class="s-subtext">{% trans "The following email addresses are associated with your account:" %}</p>
+
+    {% url 'account_email' as email_url %}
+    <form method="post" action="{{ email_url }}" class="text-left mb-3">
+      {% csrf_token %}
+      {% for radio in emailaddress_radios %}
+        {% with emailaddress=radio.emailaddress %}
+          <div class="custom-control custom-radio mb-2">
+            <input type="radio" class="custom-control-input" id="{{ radio.id }}" name="email" value="{{ emailaddress.email }}" {% if radio.checked %}checked{% endif %}>
+            <label class="custom-control-label" for="{{ radio.id }}">
+              {{ emailaddress.email }}
+              {% if emailaddress.verified %}<span class="badge badge-success ml-1">{% trans "Verified" %}</span>{% else %}<span class="badge badge-warning ml-1">{% trans "Unverified" %}</span>{% endif %}
+              {% if emailaddress.primary %}<span class="badge badge-info ml-1">{% trans "Primary" %}</span>{% endif %}
+            </label>
+          </div>
+        {% endwith %}
+      {% endfor %}
+      <div class="mt-3 d-flex flex-wrap gap-2">
+        <button class="btn btn-primary btn-sm" type="submit" name="action_primary">{% trans "Make Primary" %}</button>
+        <button class="btn btn-outline-secondary btn-sm" type="submit" name="action_send">{% trans "Re-send Verification" %}</button>
+        <button class="btn btn-outline-danger btn-sm" type="submit" name="action_remove">{% trans "Remove" %}</button>
+      </div>
+    </form>
+  {% else %}
+    {% include "account/snippets/warn_no_email.html" %}
+  {% endif %}
+
+  {% if can_add_email %}
+    <hr>
+    <h2 class="s-heading" style="font-size:.95rem;margin-top:1rem;">{% trans "Add Email Address" %}</h2>
+    {% url 'account_email' as action_url %}
+    <form method="post" action="{{ action_url }}" class="text-left">
+      {% csrf_token %}
+      {% for field in form %}
+        <div class="form-group">
+          <label for="{{ field.id_for_label }}" style="font-size:.82rem;font-weight:500;">{{ field.label }}</label>
+          <input type="{{ field.field.widget.input_type }}" name="{{ field.name }}" id="{{ field.id_for_label }}" class="form-control {% if field.errors %}is-invalid{% endif %}" value="{{ field.value|default_if_none:'' }}" required>
+          {% if field.errors %}<div class="invalid-feedback d-block">{{ field.errors|striptags }}</div>{% endif %}
+        </div>
+      {% endfor %}
+      <button class="btn btn-primary btn-sm" type="submit" name="action_add">{% trans "Add Email" %}</button>
+    </form>
+  {% endif %}
+
+  <p class="s-footer">&copy; {% now "Y" %} Siene. All rights reserved.</p>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.6.4/dist/jquery.slim.min.js" integrity="sha384-M6e/DU3CtaSB3aCW3V4uMfDDP09r1h8/1j3e9LXaLi1K/7gPmrYm9J5AZx8OCBV" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-Fy6S3B9q64WdZWQUiU+q4/2Lc9npb8tCaSX9FK7E8HnRr0Jz8D6OP9dO5Vg3Q9ct" crossorigin="anonymous"></script>
+</body>
+</html>

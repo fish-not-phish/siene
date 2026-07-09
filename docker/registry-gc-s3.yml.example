@@ -1,0 +1,23 @@
+# Example GC config for S3 storage — NOT used directly.
+# When REGISTRY_STORAGE_BACKEND=s3, the worker generates an equivalent
+# config at runtime (in a tempfile) using the REGISTRY_S3_* env vars,
+# so credentials are never written to disk on the host.
+#
+# This file exists purely for reference.
+version: 0.1
+storage:
+  s3:
+    region: us-east-1
+    bucket: my-siene-registry
+    # accesskey/secretkey: omit entirely to use IAM role auth on EC2/ECS/EKS
+    accesskey: "AKIAIOSFODNN7EXAMPLE"
+    secretkey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    encrypt: false
+    secure: true          # set false for HTTP-only MinIO or non-TLS endpoints
+    v4auth: true          # required for non-us-east-1 AWS regions and all S3-compatible services
+    # regionendpoint: https://minio.example.com   # for S3-compatible (MinIO, R2, etc.)
+    # forcepathstyle: true                         # REQUIRED by Distribution v3 when regionendpoint is set
+    # rootdirectory: /optional/prefix
+    # redirectendpoint: https://minio-public.example.com  # public URL for presigned redirects when endpoint is internal
+  delete:
+    enabled: true

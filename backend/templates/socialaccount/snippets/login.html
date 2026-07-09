@@ -1,0 +1,13 @@
+{% load i18n allauth socialaccount %}
+{% get_providers as socialaccount_providers %}
+
+{% if socialaccount_providers %}
+  {% if not SOCIALACCOUNT_ONLY %}
+    <div style="display:flex;align-items:center;text-align:center;color:#64748b;font-size:.78rem;margin:1rem 0;">
+      <span style="flex:1;border-bottom:1px solid #e2e8f0;margin-right:.5rem;"></span>
+      {% translate "or continue with" %}
+      <span style="flex:1;border-bottom:1px solid #e2e8f0;margin-left:.5rem;"></span>
+    </div>
+  {% endif %}
+  {% include "socialaccount/snippets/provider_list.html" with process=process %}
+{% endif %}

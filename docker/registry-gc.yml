@@ -1,0 +1,13 @@
+# Minimal registry config used exclusively by the worker for blob GC.
+# The registry binary (copied from registry:3.1.1) reads this when
+# run_gc calls: registry garbage-collect /etc/registry-gc.yml
+#
+# IMPORTANT: storage.filesystem.rootdirectory must match
+# REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY in the siene-registry service,
+# and the registry_data volume must be mounted at the same path in the worker.
+version: 0.1
+storage:
+  filesystem:
+    rootdirectory: /var/lib/registry
+  delete:
+    enabled: true

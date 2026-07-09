@@ -1,0 +1,447 @@
+# ── Siene — full stack ────────────────────────────────────────────────────────
+#
+# Routing:
+#   HTTPS /v2/          → siene-registry:5000   (Docker Distribution push/pull)
+#   HTTPS /api/         → siene-backend:8000
+#   HTTPS /accounts/    → siene-backend:8000    (allauth)
+#   HTTPS /su-admin/    → siene-backend:8000    (admin)
+#   HTTPS /static/      → siene-backend:8000    (WhiteNoise)
+#   HTTPS /*            → siene-frontend:3000   (Next.js, catch-all)
+#   HTTP  /*            → 301 → HTTPS
+# ─────────────────────────────────────────────────────────────────────────────
+# 
+# Dev / host mode (current):
+#   docker-compose up -d siene-postgres siene-redis siene-registry siene-trivy
+#   → runs only infra; Django/Celery/frontend run manually on the host
+#
+# Full Docker mode:
+#   docker-compose up -d --build
+#   → runs everything in containers
+#
+# All secret values below are placeholders — override via a .env file placed
+# next to this docker-compose.yml or by exporting env vars before running.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Infrastructure ───────────────────────────────────────────────────────────
+
+  siene-postgres:
+    image: postgres:16-alpine
+    container_name: siene-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: "${DB_NAME:-siene}"
+      POSTGRES_USER: "${DB_USER:-siene}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:-siene}"
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-siene} -d ${DB_NAME:-siene}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  siene-redis:
+    image: redis:7-alpine
+    container_name: siene-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  siene-registry:
+    image: registry:3.1.1
+    container_name: siene-registry
+    restart: always
+    # registry-entrypoint.sh unsets REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY when
+    # REGISTRY_STORAGE != filesystem. Distribution v3 panics with "multiple storage
+    # drivers specified" if that var is set alongside REGISTRY_STORAGE=s3.
+    entrypoint: ["/registry-entrypoint.sh"]
+    command: ["/etc/distribution/config.yml"]
+    ports:
+      - "5000:5000"
+    environment:
+      # ── Storage backend ────────────────────────────────────────────────────
+      # Filesystem (default): REGISTRY_STORAGE_BACKEND=filesystem (or unset)
+      # S3 / S3-compatible:   REGISTRY_STORAGE_BACKEND=s3
+      REGISTRY_STORAGE: "${REGISTRY_STORAGE_BACKEND:-filesystem}"
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
+      # S3 — only used when REGISTRY_STORAGE_BACKEND=s3
+      REGISTRY_STORAGE_S3_REGION: "${REGISTRY_S3_REGION:-}"
+      REGISTRY_STORAGE_S3_BUCKET: "${REGISTRY_S3_BUCKET:-}"
+      REGISTRY_STORAGE_S3_ACCESSKEY: "${REGISTRY_S3_ACCESS_KEY:-}"
+      REGISTRY_STORAGE_S3_SECRETKEY: "${REGISTRY_S3_SECRET_KEY:-}"
+      REGISTRY_STORAGE_S3_REGIONENDPOINT: "${REGISTRY_S3_ENDPOINT:-}"
+      REGISTRY_STORAGE_S3_ROOTDIRECTORY: "${REGISTRY_S3_ROOT_DIRECTORY:-}"
+      REGISTRY_STORAGE_S3_ENCRYPT: "false"
+      # Set REGISTRY_S3_SECURE=false for HTTP-only MinIO or other non-TLS S3-compatible endpoints
+      REGISTRY_STORAGE_S3_SECURE: "${REGISTRY_S3_SECURE:-true}"
+      # Required by Distribution v3 when using a custom regionendpoint (MinIO, R2, etc.)
+      REGISTRY_STORAGE_S3_FORCEPATHSTYLE: "${REGISTRY_S3_FORCE_PATH_STYLE:-false}"
+      # Required for all non-us-east-1 AWS regions and all S3-compatible services
+      REGISTRY_STORAGE_S3_V4AUTH: "true"
+      # Optional: separate public URL for presigned blob download redirects.
+      # Set this when your regionendpoint is internal-only (e.g. http://minio:9000)
+      # so Docker clients receive a reachable presigned URL on docker pull.
+      REGISTRY_STORAGE_S3_REDIRECTENDPOINT: "${REGISTRY_S3_REDIRECT_ENDPOINT:-}"
+      # Disable S3 presigned-URL redirects for internal blob access.
+      # skopeo (used by the replication worker) cannot handle 307 redirects to
+      # presigned S3 URLs during its blob-exists check and dies with a fatal
+      # error. Setting this to "true" makes Distribution serve blobs directly
+      # over HTTP instead of redirecting, which fixes pull replication with S3.
+      # Has no effect on filesystem storage. Set to "false" if you rely on
+      # presigned redirects for direct client-to-S3 downloads.
+      REGISTRY_STORAGE_S3_REDIRECT_DISABLE: "${REGISTRY_S3_REDIRECT_DISABLE:-true}"
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+      REGISTRY_AUTH: token
+      # Token realm is called by Docker clients on the user's machine (outside
+      # Docker), so it must be a host-reachable address. Set REGISTRY_EXTERNAL_URL
+      # in your .env to your domain or IP (e.g. https://registry.example.com).
+      # Defaults to localhost for single-machine dev.
+      REGISTRY_AUTH_TOKEN_REALM: "${REGISTRY_EXTERNAL_URL:-http://localhost:8000}/api/registry/auth/token"
+      REGISTRY_AUTH_TOKEN_SERVICE: "${REGISTRY_TOKEN_SERVICE:-registry.local}"
+      REGISTRY_AUTH_TOKEN_ISSUER: "${REGISTRY_TOKEN_ISSUER:-siene}"
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /certs/domain.crt
+      REGISTRY_HTTP_SECRET: "${REGISTRY_HTTP_SECRET}"
+      REGISTRY_NOTIFICATIONS_ENDPOINTS: |
+        - name: django-hook
+          url: http://siene-backend:8000/api/registry/events/
+          headers:
+            Authorization: ["Bearer ${REGISTRY_INTERNAL_TOKEN}"]
+          events: ["push", "delete"]
+          ignoremediatypes: ["application/octet-stream"]
+    volumes:
+      - registry_data:/var/lib/registry
+      - registry_certs:/certs:ro
+      - ./registry-entrypoint.sh:/registry-entrypoint.sh:ro
+    depends_on:
+      siene-backend:
+        condition: service_healthy
+
+  siene-trivy:
+    image: aquasec/trivy:latest
+    container_name: siene-trivy
+    restart: always
+    # Download both the vuln DB and Java DB before starting the server.
+    # The Java DB is only fetched by the client (worker) during analysis of
+    # JVM images, so we pre-seed it here into the shared cache volume so the
+    # worker can use it with --skip-java-db-update without needing internet access.
+    entrypoint: >
+      sh -c "
+        trivy image --download-db-only --cache-dir /root/.cache/trivy &&
+        trivy image --download-java-db-only --cache-dir /root/.cache/trivy &&
+        mkdir -p /tmp/trivy-checks-seed &&
+        trivy config --cache-dir /root/.cache/trivy /tmp/trivy-checks-seed || true &&
+        exec trivy server --listen 0.0.0.0:4954
+      "
+    ports:
+      - "4954:4954"
+    volumes:
+      - trivy_cache:/root/.cache/trivy
+    environment:
+      TRIVY_CACHE_DIR: /root/.cache/trivy
+
+  # ── Application ──────────────────────────────────────────────────────────────
+
+  siene-backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: siene-backend
+    restart: always
+    environment:
+      DEBUG: "0"
+      DEPLOYMENT_MODE: "basic"
+      ALLOWED_HOSTS: "siene-backend,localhost,127.0.0.1"
+      CUSTOM_DOMAIN: "${DOMAIN}"
+      SECRET_KEY: "${DJANGO_SECRET_KEY:-change-me-in-production}"
+      TIME_ZONE: "${TIME_ZONE:-UTC}"
+      DB_NAME: "${DB_NAME:-siene}"
+      DB_USER: "${DB_USER:-siene}"
+      DB_PASSWORD: "${DB_PASSWORD:-siene}"
+      DB_HOST: "siene-postgres"
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: "redis://siene-redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://siene-redis:6379/0"
+      TRIVY_SERVER_URL: "http://siene-trivy:4954"
+      REGISTRY_INTERNAL_URL: "http://siene-registry:5000"
+      REGISTRY_INTERNAL_TOKEN: "${REGISTRY_INTERNAL_TOKEN}"
+      REGISTRY_CERTS_DIR: "/app/certs"
+      REGISTRY_PRIVATE_KEY_PATH: "/app/certs/private.pem"
+      REGISTRY_TOKEN_ISSUER: "${REGISTRY_TOKEN_ISSUER:-siene}"
+      REGISTRY_TOKEN_SERVICE: "${REGISTRY_TOKEN_SERVICE:-registry.local}"
+      SECURE_SSL_REDIRECT: "${SECURE_SSL_REDIRECT:-0}"
+      CSRF_COOKIE_SECURE: "${CSRF_COOKIE_SECURE:-0}"
+      EMAIL_ENABLED: "${EMAIL_ENABLED:-0}"
+      EMAIL_HOST: "${EMAIL_HOST:-smtp.gmail.com}"
+      EMAIL_PORT: "${EMAIL_PORT:-587}"
+      EMAIL_USE_TLS: "${EMAIL_USE_TLS:-1}"
+      DEFAULT_FROM_EMAIL: "${DEFAULT_FROM_EMAIL:-Siene <noreply@example.com>}"
+      EMAIL_HOST_USER: "${EMAIL_HOST_USER:-}"
+      EMAIL_HOST_PASSWORD: "${EMAIL_HOST_PASSWORD:-}"
+    ports:
+      - "8000:8000"
+    volumes:
+      - registry_certs:/app/certs
+    depends_on:
+      siene-postgres:
+        condition: service_healthy
+      siene-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/accounts/status || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  siene-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: siene-worker
+    restart: always
+    # default queue only — lightweight tasks: replication, GC, registry sync,
+    # signature checks. No image-layer workloads here.
+    command: celery -A backend worker -l info -Q default --concurrency 4 -n default@%h
+    environment:
+      DEBUG: "0"
+      DEPLOYMENT_MODE: "basic"
+      ALLOWED_HOSTS: "siene-backend,localhost,127.0.0.1"
+      CUSTOM_DOMAIN: "${DOMAIN}"
+      SECRET_KEY: "${DJANGO_SECRET_KEY:-change-me-in-production}"
+      TIME_ZONE: "${TIME_ZONE:-UTC}"
+      DB_NAME: "${DB_NAME:-siene}"
+      DB_USER: "${DB_USER:-siene}"
+      DB_PASSWORD: "${DB_PASSWORD:-siene}"
+      DB_HOST: "siene-postgres"
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: "redis://siene-redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://siene-redis:6379/0"
+      TRIVY_SERVER_URL: "http://siene-trivy:4954"
+      REGISTRY_INTERNAL_URL: "http://siene-registry:5000"
+      REGISTRY_INTERNAL_TOKEN: "${REGISTRY_INTERNAL_TOKEN}"
+      REGISTRY_CERTS_DIR: "/app/certs"
+      REGISTRY_PRIVATE_KEY_PATH: "/app/certs/private.pem"
+      REGISTRY_TOKEN_ISSUER: "${REGISTRY_TOKEN_ISSUER:-siene}"
+      REGISTRY_TOKEN_SERVICE: "${REGISTRY_TOKEN_SERVICE:-registry.local}"
+      # Blob GC — registry binary reads a config that matches the live
+      # registry's storage backend. For filesystem mode the config file is
+      # bind-mounted; for S3 mode the task generates a temp config at runtime.
+      REGISTRY_GC_CONFIG: "/etc/registry-gc.yml"
+      REGISTRY_STORAGE_BACKEND: "${REGISTRY_STORAGE_BACKEND:-filesystem}"
+      REGISTRY_S3_REGION: "${REGISTRY_S3_REGION:-}"
+      REGISTRY_S3_BUCKET: "${REGISTRY_S3_BUCKET:-}"
+      REGISTRY_S3_ACCESS_KEY: "${REGISTRY_S3_ACCESS_KEY:-}"
+      REGISTRY_S3_SECRET_KEY: "${REGISTRY_S3_SECRET_KEY:-}"
+      REGISTRY_S3_ENDPOINT: "${REGISTRY_S3_ENDPOINT:-}"
+      REGISTRY_S3_ROOT_DIRECTORY: "${REGISTRY_S3_ROOT_DIRECTORY:-}"
+      REGISTRY_S3_FORCE_PATH_STYLE: "${REGISTRY_S3_FORCE_PATH_STYLE:-false}"
+      REGISTRY_S3_SECURE: "${REGISTRY_S3_SECURE:-true}"
+      REGISTRY_S3_REDIRECT_ENDPOINT: "${REGISTRY_S3_REDIRECT_ENDPOINT:-}"
+    volumes:
+      - registry_certs:/app/certs
+      - registry_data:/var/lib/registry
+      - ./registry-gc.yml:/etc/registry-gc.yml:ro
+    depends_on:
+      siene-postgres:
+        condition: service_healthy
+      siene-redis:
+        condition: service_healthy
+      siene-backend:
+        condition: service_healthy
+
+  siene-worker-scans:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: siene-worker-scans
+    restart: always
+    # Trivy scans (vuln, secret, misconfig) run one at a time to prevent OOM.
+    # Each scan type invokes `trivy image` as a subprocess which decompresses
+    # every image layer into memory. Peak RSS scales with the uncompressed layer
+    # size — typically 2–4× the compressed image size you see on disk:
+    #
+    #   Compressed image size  →  approx. peak scan RAM
+    #   ~200 MB (slim images)  →  ~1 GB
+    #   ~500 MB (Debian/Ubuntu)→  ~2 GB
+    #   ~1 GB   (JVM/Node/ML)  →  ~4 GB
+    #   ~2 GB   (large ML)     →  ~6 GB
+    #   ~4 GB   (PyTorch/CUDA) →  ~10–12 GB
+    #
+    # If a scan exceeds available host memory the worker is OOM-killed and
+    # Celery automatically requeues the task (CELERY_TASK_ACKS_LATE = True).
+    #
+    # To cap memory and prevent scan spikes from starving other services,
+    # uncomment and adjust mem_limit / memswap_limit for your largest image.
+    # Set memswap_limit equal to mem_limit to disable swap for this container
+    # (clean OOM kill + retry is faster than swap thrash):
+    #
+    # mem_limit: 12g       # for images up to ~4 GB compressed
+    # memswap_limit: 12g
+    #
+    # mem_limit: 6g        # for images up to ~2 GB compressed
+    # memswap_limit: 6g
+    #
+    # mem_limit: 4g        # for images up to ~1 GB compressed
+    # memswap_limit: 4g
+    #
+    # WARNING: setting mem_limit lower than the peak for your largest image
+    # will cause that scan to fail repeatedly. Leave unlimited (default) if
+    # you are unsure or have images larger than 1 GB compressed.
+    command: celery -A backend worker -l info -Q scans --concurrency 1 -n scans@%h
+    environment:
+      DEBUG: "0"
+      DEPLOYMENT_MODE: "basic"
+      ALLOWED_HOSTS: "siene-backend,localhost,127.0.0.1"
+      CUSTOM_DOMAIN: "${DOMAIN}"
+      SECRET_KEY: "${DJANGO_SECRET_KEY:-change-me-in-production}"
+      TIME_ZONE: "${TIME_ZONE:-UTC}"
+      DB_NAME: "${DB_NAME:-siene}"
+      DB_USER: "${DB_USER:-siene}"
+      DB_PASSWORD: "${DB_PASSWORD:-siene}"
+      DB_HOST: "siene-postgres"
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: "redis://siene-redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://siene-redis:6379/0"
+      TRIVY_SERVER_URL: "http://siene-trivy:4954"
+      TRIVY_CACHE_DIR: /root/.cache/trivy
+      REGISTRY_INTERNAL_URL: "http://siene-registry:5000"
+      REGISTRY_INTERNAL_TOKEN: "${REGISTRY_INTERNAL_TOKEN}"
+      REGISTRY_CERTS_DIR: "/app/certs"
+      REGISTRY_PRIVATE_KEY_PATH: "/app/certs/private.pem"
+      REGISTRY_TOKEN_ISSUER: "${REGISTRY_TOKEN_ISSUER:-siene}"
+      REGISTRY_TOKEN_SERVICE: "${REGISTRY_TOKEN_SERVICE:-registry.local}"
+    volumes:
+      - registry_certs:/app/certs
+      - trivy_cache:/root/.cache/trivy
+    depends_on:
+      siene-postgres:
+        condition: service_healthy
+      siene-redis:
+        condition: service_healthy
+      siene-backend:
+        condition: service_healthy
+      siene-trivy:
+        condition: service_started
+
+  siene-worker-sbom:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: siene-worker-sbom
+    restart: always
+    # SBOM generation (Syft) is isolated to its own worker at concurrency 1.
+    # Syft decompresses the full image layer set — same memory profile as Trivy.
+    # See the siene-worker-scans comment above for the peak RAM table.
+    # Syft tends to use slightly less peak RAM than Trivy for the same image.
+    #
+    # Uncomment and adjust to cap memory for this container:
+    #
+    # mem_limit: 10g       # for images up to ~4 GB compressed
+    # memswap_limit: 10g
+    #
+    # mem_limit: 5g        # for images up to ~2 GB compressed
+    # memswap_limit: 5g
+    #
+    # mem_limit: 3g        # for images up to ~1 GB compressed
+    # memswap_limit: 3g
+    command: celery -A backend worker -l info -Q sbom --concurrency 1 -n sbom@%h
+    environment:
+      DEBUG: "0"
+      DEPLOYMENT_MODE: "basic"
+      ALLOWED_HOSTS: "siene-backend,localhost,127.0.0.1"
+      CUSTOM_DOMAIN: "${DOMAIN}"
+      SECRET_KEY: "${DJANGO_SECRET_KEY:-change-me-in-production}"
+      TIME_ZONE: "${TIME_ZONE:-UTC}"
+      DB_NAME: "${DB_NAME:-siene}"
+      DB_USER: "${DB_USER:-siene}"
+      DB_PASSWORD: "${DB_PASSWORD:-siene}"
+      DB_HOST: "siene-postgres"
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: "redis://siene-redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://siene-redis:6379/0"
+      REGISTRY_INTERNAL_URL: "http://siene-registry:5000"
+      REGISTRY_INTERNAL_TOKEN: "${REGISTRY_INTERNAL_TOKEN}"
+      REGISTRY_CERTS_DIR: "/app/certs"
+      REGISTRY_PRIVATE_KEY_PATH: "/app/certs/private.pem"
+      REGISTRY_TOKEN_ISSUER: "${REGISTRY_TOKEN_ISSUER:-siene}"
+      REGISTRY_TOKEN_SERVICE: "${REGISTRY_TOKEN_SERVICE:-registry.local}"
+    volumes:
+      - registry_certs:/app/certs
+    depends_on:
+      siene-postgres:
+        condition: service_healthy
+      siene-redis:
+        condition: service_healthy
+      siene-backend:
+        condition: service_healthy
+
+  siene-beat:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: siene-beat
+    restart: always
+    command: celery -A backend beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      DEBUG: "0"
+      DEPLOYMENT_MODE: "basic"
+      ALLOWED_HOSTS: "siene-backend,localhost,127.0.0.1"
+      CUSTOM_DOMAIN: "${DOMAIN}"
+      SECRET_KEY: "${DJANGO_SECRET_KEY:-change-me-in-production}"
+      TIME_ZONE: "${TIME_ZONE:-UTC}"
+      DB_NAME: "${DB_NAME:-siene}"
+      DB_USER: "${DB_USER:-siene}"
+      DB_PASSWORD: "${DB_PASSWORD:-siene}"
+      DB_HOST: "siene-postgres"
+      DB_PORT: "5432"
+      CELERY_BROKER_URL: "redis://siene-redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://siene-redis:6379/0"
+    volumes:
+      - registry_certs:/app/certs
+    depends_on:
+      siene-postgres:
+        condition: service_healthy
+      siene-redis:
+        condition: service_healthy
+      siene-backend:
+        condition: service_healthy
+
+  siene-frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        # Baked into the Next.js bundle at build time.
+        # Browser requests come from outside Docker so they need the external URL.
+        NEXT_PUBLIC_BASE_URL: "${REGISTRY_EXTERNAL_URL:-http://localhost:8000}/api/"
+        NEXT_PUBLIC_BASE_URL_ACCOUNTS: "${REGISTRY_EXTERNAL_URL:-http://localhost:8000}/"
+        NEXT_PUBLIC_REGISTRY_HOST: "${DOMAIN:-localhost}:5000"
+    container_name: siene-frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      # Server-side fetch calls inside the container use the internal network.
+      NEXT_INTERNAL_API_URL: "http://siene-backend:8000"
+    depends_on:
+      siene-backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  registry_data:
+  redis_data:
+  trivy_cache:
+  registry_certs:
