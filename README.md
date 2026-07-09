@@ -2,6 +2,9 @@
 
 A self-hostable container registry UI for small to mid-sized engineering teams. Siene sits on top of [Docker Distribution v3](https://github.com/distribution/distribution) and adds the project management, security scanning, and access control that the raw registry lacks - without the operational complexity of Harbor.
 
+![](frontend/public/screenshots/admin-dashboard.png)
+![](frontend/public/screenshots/image-view.png)
+
 ## Features
 
 - **Projects** - namespace isolation with per-project storage quotas and public/private visibility
