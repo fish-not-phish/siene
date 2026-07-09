@@ -389,6 +389,21 @@ export default function AdminSettingsPage() {
                         disabled={!oidcEnabled}
                       />
                     </div>
+
+                    {oidcEnabled && oidcType && (
+                      <div className='space-y-1.5'>
+                        <Label className='text-sm font-medium'>Callback / Redirect URI</Label>
+                        <Input
+                          readOnly
+                          value={`${window.location.origin}/accounts/oidc/${oidcType}/login/callback/`}
+                          onClick={(e) => (e.target as HTMLInputElement).select()}
+                          className='cursor-pointer select-all font-mono text-xs'
+                        />
+                        <p className='text-xs text-muted-foreground'>
+                          Register this URI in your IDP&apos;s allowed redirect/callback URLs.
+                        </p>
+                      </div>
+                    )}
                     <div className='space-y-1.5'>
                       <Label htmlFor='oidc-client-id'>Client ID</Label>
                       <Input
